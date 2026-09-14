@@ -1,0 +1,931 @@
+---
+title: "Raport- statystyka"
+author: "Amelia Głowala 254939, Julia Glicner 257652"
+date: "2026-03-19"
+output: 
+  html_document:
+    theme: flatly
+    toc: true
+    toc_float: true
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE,       
+  warning = FALSE,    
+  message = FALSE,    
+  fig.align = 'center', 
+  fig.width = 8,      
+  fig.height = 6     
+)
+```
+
+# 1. Wstęp i cel projektu \
+**CZĘŚĆ TEORYTYCZNA:** \
+Głównym celem tej części projektu jest przeprowadzenie eksperymentu symulacyjnego wykorzystującego metodę **Monte Carlo**. Eksperyment ma za zadanie empiryczne zbadanie własności statystycznych wybranych estymatorów oraz porównanie ich z wartościami teoretycznymi.\
+W ramach projektu poddano analizie cztery indywidualne zagadnienia badawcze: \
+**1.** Estymację na podstawie **szeregów rozdzielczych** w porównaniu do **klasycznych metod estymacji**, z uwzględnieniem wpływu stopnia agregacji danych (liczby klas $k$). \
+**2.** Problem jednoczesnego wnioskowania dla wielu prób i zastosowanie **korekty Bonferroniego** w celu zachowania globalnego poziomu ufności.\
+**3.** Ocena istotności różnic między pomiarami zależnymi za pomocą testu t-Studenta dla prób sparowanych wraz z analizą mocy testu i wrażliwości procedury na błędy decyzyjne. \
+**4.** Analiza wpływu naruszenia założenia o stałości wariancji błędu losowego (heteroskedastyczności) na stabilność i precyzję estymatorów modelu regresji liniowej. \
+<br>
+**CZĘŚĆ PRAKTYCZNA** \
+Praktyczna implementacja opracowanych narzędzi statystycznych do analizy rzeczywistego zbioru danych w celu weryfikacji postawionych hipotez badawczych oraz oceny jakości dopasowania modeli w warunkach empirycznych.
+
+# 2. Część I: Estymacja na podstawie szeregów rozdzielczych
+## 2.1. Cel badawczy
+Celem tej części jest sprawdzenie, jak grupowanie danych w szeregi rozdzielcze wpływa na jakość estymacji średniej i wariancji w porównaniu z klasycznymi estymatorami obliczanymi na surowych, niezgrupowanych danych. Analizowany jest wpływ parametru $k$ (liczba klas) na błąd średniokwadratowy ($MSE$) estymatorów. \
+Aby sprawdzić zachowanie estymatorów w różnych warunkach, symulacje przeprowadzono dla populacji o rozkładach: normalnym, jednostajnym, wykładniczym oraz rozkładzie t-Studenta (który pozwala zaobserwować zachowanie estymatorów dla danych o "grubych ogonach" i przy obecności obserwacji odstających).
+
+## 2.2. Opis eksperymentu
+W kodzie zaimplementowano następujące kroki: \
+**-** wygenerowano próby o liczebności $n = 100$ z czterech różnych rozkładów (normalny, wykładniczy, jednostajny, t-Studenta), \
+**-** przeprowadzono symulację Monte Carlo z liczbą powtórzeń $B = 200$, \
+**-** dla każdej wygenerowanej próby obliczono estymatory klasyczne (średnia i wariancja z surowych danych) oraz estymatory oparte na szeregu rozdzielczym z różną liczbą klas ($k \in \{3, 5, 10, 20\}$), \
+**-** wyznaczono błąd średniokwadratowy ($MSE$) dla obydwu podejść i zestawiono go z teoretycznym $MSE$ dostępnym we wzorach analitycznych.
+
+```{r}
+set.seed(111)
+files <- list.files("functions/", pattern = "\\.R$", full.names = TRUE)
+for (f in files) source(f)
+
+n <- 100
+klasy <- c(3, 5, 10, 20)
+B <- 200  
+
+estymatory <- function(x, k) {
+    fd <- freq_distr(x, k)
+    srednia <- freqdistr_mean(fd)
+    wariancja <- freqdistr_var(fd)
+    return(c(srednia = srednia, wariancja = wariancja))
+}
+```
+
+## 2.3. Wyniki symulacji
+### 2.3.1. Wnioski z analizy wyników
+Analiza tabeli porównującej estymatory z szeregu rozdzielczego i klasyczne prowadzi do trzech głównych wniosków:\
+**- Więcej klas to większa dokładność:** Wraz ze wzrostem liczby klas (od $k=3$ do $k=20$), wartości estymatorów z szeregu rozdzielczego wyraźnie zbiegają do estymatorów klasycznych, niwelując tzw. błąd grupowania.\
+**- Zawyżona wariancja przy małym $k$:** Podział na zaledwie 3 klasy drastycznie i sztucznie zawyża wariancję (np. dla rozkładu jednostajnego: 2.37 z szeregu wobec 1.76 klasycznie). Wynika to z zakładania, że wszystkie obserwacje leżą w środku bardzo szerokich przedziałów.\
+**- Problem "grubych ogonów" (rozkład t-Studenta):** Zjawisko niedokładności jest najsilniejsze dla rozkładu t-Studenta. Obecność obserwacji odstających wymusza utworzenie szerokich klas skrajnych, co przy $k=3$ powoduje gigantyczne przeszacowanie wariancji (3.68 z szeregu wobec 1.92 klasycznie).\
+**Podsumowanie:** Aby estymacja oparta na szeregu rozdzielczym była wiarygodna i nie generowała sztucznego rozrzutu, wymaga zastosowania drobniejszego podziału danych (w tym przypadku $k \ge 10$).
+
+```{r}
+set.seed(111)
+# TABELA ŚREDNICH I WARIANCJI
+rozklady <- list(
+    normalny    = rnorm(n, -2, 2),
+    wykladniczy = rexp(n, 4),
+    jednostajny = runif(n, 0, 5),
+    t           = rt(n, df = 5)
+)
+wyniki <- data.frame()
+
+for (nazwa_rozkladu in names(rozklady)) {
+    x <- rozklady[[nazwa_rozkladu]]
+    klasyczna_srednia <- mean(x)
+    klasyczna_wariancja <- var(x)
+  
+    for (k in klasy) {
+        est <- estymatory(x, k)
+        wyniki <- rbind(wyniki, data.frame(
+            rozklad             = nazwa_rozkladu,
+            k                   = k,
+            srednia_fd          = est["srednia"], 
+            wariancja_fd        = est["wariancja"],
+            klasyczna_srednia   = klasyczna_srednia,
+            klasyczna_wariancja = klasyczna_wariancja
+        ))
+    }
+}
+rownames(wyniki) <- NULL 
+library(knitr)
+knitr::kable(wyniki, caption = "porównanie estymatorów z szeregu rozdzielczego i klasycznych", digits = 4)
+```
+
+```{r}
+set.seed(111)
+# MONTE CARLO DLA MSE ŚREDNIEJ
+srednie_rozkladow <- list( 
+    normalny    = -2,
+    wykladniczy = 1/4,
+    jednostajny = 2.5,
+    t           = 0
+)
+wyniki_mse <- data.frame()
+
+for (nazwa in names(srednie_rozkladow)) {
+    for (k in klasy) {
+        bledy_fd <- numeric(B)
+        bledy_kl <- numeric(B)
+        
+        for (b in 1:B) {
+            x <- switch(nazwa,
+                        normalny    = rnorm(n, -2, 2),
+                        wykladniczy = rexp(n, 4),
+                        jednostajny = runif(n, 0, 5),
+                        t           = rt(n, df = 5))
+          
+            prawdziwa_srednia <- srednie_rozkladow[[nazwa]]
+            bledy_kl[b] <- mean(x) - prawdziwa_srednia
+            fd <- freq_distr(x, k = k)
+            bledy_fd[b] <- freqdistr_mean(fd) - prawdziwa_srednia
+        }
+        wyniki_mse <- rbind(wyniki_mse, data.frame(
+            rozklad = nazwa,
+            k       = k,
+            MSE_fd  = mean(bledy_fd^2),
+            MSE_kl  = mean(bledy_kl^2)
+        ))
+    }
+}
+mse_teoretyczne <- list(
+    normalny    = 2^2 / n,                
+    wykladniczy = (1/4)^2 / n,         
+    jednostajny = ((5 - 0)^2 / 12) / n,
+    t           = (5 / (5 - 2)) / n
+)
+# Monte Carlo dla MSE wariancji 
+wariancje_rozkladow <- list(
+    normalny    = 2^2,              
+    wykladniczy = (1/4)^2,     
+    jednostajny = (5 - 0)^2 / 12, 
+    t           = 5 / (5 - 2)
+)
+wyniki_mse_var <- data.frame()
+
+for (nazwa in names(wariancje_rozkladow)) {
+    for (k in klasy) {
+        bledy_fd_var <- numeric(B)
+        bledy_kl_var <- numeric(B)
+        
+        for (b in 1:B) {
+            x <- switch(nazwa,
+                        normalny    = rnorm(n, -2, 2),
+                        wykladniczy = rexp(n, 4),
+                        jednostajny = runif(n, 0, 5),
+                        t           = rt(n, df = 5))
+            prawdziwa_wariancja <- wariancje_rozkladow[[nazwa]]
+            bledy_kl_var[b] <- var(x) - prawdziwa_wariancja
+            fd_var <- freq_distr(x, k = k)
+            bledy_fd_var[b] <- freqdistr_var(fd_var) - prawdziwa_wariancja
+        }
+        wyniki_mse_var <- rbind(wyniki_mse_var, data.frame(
+            rozklad    = nazwa,
+            k          = k,
+            MSE_fd_var = mean(bledy_fd_var^2),
+            MSE_kl_var = mean(bledy_kl_var^2)
+        ))
+    }
+}
+```
+
+### 2.3.2. Wnioski z analizy błędu MSE dla średniej
+**- Spadek błędu:** Wraz ze wzrostem liczby klas (już od $k=10$), błąd estymatora z szeregu spada i zrównuje się z precyzją metod klasycznych.\
+**- Poprawność modelu:** Pokrywanie się empirycznego błędu klasycznego (czerwona linia) z błędem teoretycznym (fioletowa) dowodzi poprawności naszej symulacji Monte Carlo.\
+**- Wrażliwość grubych ogonów:** Rozkład t-Studenta przy zbyt małym podziale ($k=3$) notuje gigantyczny spadek precyzji. Skrajne obserwacje zaburzają tu estymację najbardziej.\
+**Podsumowanie:** Podział na co najmniej 10 klas to optymalny kompromis – pozwala zgrupować dane bez zauważalnej utraty informacji o średniej populacji.
+
+```{r}
+set.seed(111)
+# WYKRESY MSE dla średniej
+par(mfrow = c(2, 2))
+for (nazwa in names(srednie_rozkladow)) {
+    wartosci <- subset(wyniki_mse, rozklad == nazwa)
+    y_lims <- range(c(wartosci$MSE_fd, wartosci$MSE_kl), na.rm = TRUE)
+  
+    plot(wartosci$k, wartosci$MSE_fd, type = "b", pch = 19,
+         main = paste("MSE średniej -", nazwa),
+         xlab = "liczba klas (k)", ylab = "MSE",
+         col = "black", lwd = 2, 
+         ylim = c(y_lims[1] * 0.8, y_lims[2] * 1.2))
+    abline(h = wartosci$MSE_kl[1], col = "red", lty = 2, lwd = 2)
+    abline(h = mse_teoretyczne[[nazwa]], col = "purple", lty = 3, lwd = 2)
+    legend("topright",
+           legend = c("szereg", "klasyczny", "teoretyczne MSE"),
+           col    = c("black", "red", "purple"),
+           lty    = c(1, 2, 3),
+           bty    = "n")
+}
+```
+
+### 2.3.3. Wnioski z analizy błędu MSE dla wariancji
+**- Olbrzymi błąd przy małym $k$:** Estymacja wariancji jest skrajnie wrażliwa na zbyt mocne grupowanie. Podział na zaledwie 3 klasy dla każdego z rozkładów skutkuje gigantycznym błędem początkowym (czarne kropki znajdują się bardzo wysoko w stosunku do fioletowej linii).\
+**- Gwałtowna poprawa precyzji:** Zwiększenie liczby klas z 3 do 5 przynosi radykalny, bardzo stromy spadek błędu $MSE$. Udowadnia to, że estymator wariancji jest dokładniejszy przy nieco drobniejszym podziale.\
+**- Stabilizacja przy większym $k$:** Podobnie jak w przypadku średniej, przy $k \ge 10$ błąd estymatora opartego na szeregu (czarna linia) opada i zrównuje się z błędem klasycznej metody na surowych danych (fioletowa linia przerywana).\
+**Podsumowanie:** Szacowanie wariancji na podstawie szeregu rozdzielczego o bardzo małej liczbie klas (np. $k=3$) jest obarczone krytycznym błędem przeszacowania. Aby ocena rozrzutu danych była wiarygodna, podział musi obejmować minimum 10 klas.
+
+```{r}
+set.seed(111)
+# WYKRESY DLA MSE WARIANCJI
+par(mfrow = c(2, 2))
+for (nazwa in names(wariancje_rozkladow)) {
+    wartosci_var <- subset(wyniki_mse_var, rozklad == nazwa)
+    y_lims <- range(c(wartosci_var$MSE_fd_var, wartosci_var$MSE_kl_var), na.rm = TRUE)
+  
+    plot(wartosci_var$k, wartosci_var$MSE_fd_var, type = "b", pch = 19,
+         main = paste("MSE wariancji -", nazwa),
+         xlab = "liczba klas (k)", ylab = "MSE",
+         col  = "black", lwd = 2, 
+         ylim = c(y_lims[1] * 0.8, y_lims[2] * 1.2))
+    abline(h = mean(wartosci_var$MSE_kl_var), col = "purple", lty = 2, lwd = 2)
+    legend("topright", 
+           legend = c("szereg", "klasyczny"),
+           col    = c("black", "purple"), 
+           lty    = c(1, 2), 
+           bty    = "n")
+}
+```
+
+# 3. Część II: przedziały ufności i korekta Bonferroniego
+## 3.1. Cel badawczy
+Celem tej części projektu jest zbadanie problemu spadku poziomu ufności podczas jednoczesnego wyznaczania kilku przedziałów ufności. Eksperyment ma za zadanie empirycznie zaprezentować zjawisko wielokrotnych porównań oraz sprawdzić, jak zastosowanie korekty Bonferroniego pozwala zachować deklarowany, globalny poziom ufności.
+
+## 3.2. Opis eksperymentu
+W kodzie zaimplementowano następujące kroki:\
+**-** wygenerowano próby losowe o liczebności $n = 20$ z rozkładu normalnego,\
+**-** przeprowadzono symulację Monte Carlo z liczbą powtórzeń $N = 100$,\
+**-** wyznaczono klasyczne przedziały ufności dla średniej (przy znanej i nieznanej wariancji) oraz dla samej wariancji, badając ich pokrycie empiryczne,\
+**-** zasymulowano sytuację jednoczesnego wyznaczania $m = 2$ przedziałów ufności,\
+**-**porównano empiryczne pokrycie dla standardowego poziomu istotności $\alpha = 0.05$ z pokryciem uzyskanym po zastosowaniu poprawki Bonferroniego (zaostrzony poziom $\alpha / m$).
+
+```{r}
+set.seed(111)
+
+mi <- 0
+sigma <- 1
+n <- 20
+a <- 0.05
+N <- 100
+
+# ci_fun — funkcja zwracająca przedział ufności
+# randgen - funkcja generująca próbki z wybranego rozkładu
+# true - liczba rzeczywista, prawdziwa wartość parametru (np. średnia)
+# point_estimator — funkcja zwracająca estymator punktowy danego parametru
+plot_cis <- function(ci_fun, n, randgen, true, 
+                     nsim = N, alpha = a,
+                     point_estimator = NULL, 
+                     use_log = FALSE,   
+                     ...) {  # mogą być na przykład parametry: sort, seed, col, ci_lwd         
+    dolne_granice <- numeric(nsim)
+    gorne_granice <- numeric(nsim)
+    estymatory <- numeric(nsim)
+    pokrycie <- logical(nsim) # czy przedział złapał prawdziwą wartość (TRUE/FALSE)
+  
+    for (i in 1:nsim) {
+        x <- randgen(n)
+        ci <- ci_fun(x, alpha = alpha, ...) 
+        
+        dolne_granice[i] <- ci[1]
+        gorne_granice[i] <- ci[2]
+        estymatory[i] <- if (!is.null(point_estimator)) point_estimator(x) else NA
+        pokrycie[i] <- (true >= dolne_granice[i] & true <= gorne_granice[i])
+    }
+    plot(1:nsim, estymatory,
+         ylim = range(c(dolne_granice, gorne_granice), na.rm = TRUE), # zwraca najwiekszą i najmniejszą wartość
+         log = ifelse(use_log, "y", ""), 
+         pch = 16,
+         xlab = "numer próby",
+         ylab = ifelse(use_log, "wariancja (skala log)", "wartość oczekiwana"),
+         main = deparse(substitute(ci_fun)))
+    for (i in 1:nsim) {
+        col <- ifelse(pokrycie[i], "black", "red")
+        arrows(i, dolne_granice[i], i, gorne_granice[i], 
+               angle = 90, code = 3, length = 0.05, col = col)
+    }
+    abline(h = true, col = "purple", lwd = 2)
+    cat("empiryczne pokrycie:", mean(pokrycie) * 100, "%\n")
+}
+```
+
+## 3.3. Przedziały ufności
+### 3.3.1. Przedziały ufności dla średniej (znane $\sigma$)
+**- Stała szerokość przedziałów:** Skoro wariancja populacji jest z góry znana, wszystkie wyznaczone przedziały są idealnie równej długości. Różnią się wyłącznie środkiem (czyli średnią z danej próby).\
+**- Zgodność z teorią (95%):** Większość przedziałów (czarne odcinki) poprawnie obejmuje prawdziwą średnią. Nieliczne błędy (czerwone odcinki) to naturalny efekt losowości.\
+**- Maksymalna precyzja:** Znajomość $\sigma$ pozwala na użycie rozkładu normalnego (zamiast t-Studenta), co gwarantuje możliwie najwęższe i najdokładniejsze przedziały.
+
+```{r}
+set.seed(111)
+# średnia (znane sigma)
+plot_cis(ci_ex_norm,
+         n = n, nsim = N, alpha = a,
+         randgen = function(n) rnorm(n, mean = mi, sd = sigma),
+         true = mi,
+         point_estimator = mean,
+         sigma = sigma)
+```
+
+### 3.3.2. Przedziały ufności dla średniej (nieznane $\sigma$)
+**- Zmienna szerokość przedziałów:** W przeciwieństwie do poprzedniego przypadku, tutaj każdy odcinek ma inną długość. Wynika to z faktu, że odchylenie standardowe musi być szacowane dla każdej próby osobno, co bezpośrednio wpływa na rozpiętość każdego z przedziałów.\
+**- Skuteczność rozkładu t-Studenta:** Empiryczne pokrycie (94%) jest bardzo bliske teoretycznemu poziomowi 95%. Dowodzi to, że zastosowanie rozkładu t-Studenta prawidłowo rekompensuje dodatkową niepewność wynikającą z braku znajomości $\sigma$.\
+**- Naturalne błędy estymacji:** Widoczne na wykresie czerwone odcinki to przedziały, które minęły się z prawdziwą wartością. Jest to całkowicie zgodne z założonym ryzykiem błędu $\alpha = 0.05$.
+
+```{r}
+set.seed(111)
+# średnia (nieznane sigma) 
+plot_cis(ci_ex_norm,
+         n = n, nsim = N, alpha = a,
+         randgen = function(n) rnorm(n, mean = mi, sd = sigma),
+         true = mi,
+         point_estimator = mean)
+```
+
+### 3.3.3. Przedziały ufności dla wariancji
+**- Asymetria przedziałów:** W przeciwieństwie do średniej, przedziały ufności dla wariancji (oparte na rozkładzie $\chi^2$) są naturalnie asymetryczne względem estymatora punktowego.\
+**- Skala logarytmiczna:** Zastosowanie parametru use_log = TRUE pozwala na czytelną prezentację wyników, zapobiegając optycznemu zniekształceniu asymetrycznych odcinków na wykresie.\
+**- Pokrycie empiryczne:** Symulacja potwierdza, że mimo asymetrii rozkładu, metoda zachowuje zakładany poziom ufności  $1 - \alpha = 0.95$, zatem 95% przedziałów poprawnie zawiera prawdziwą wariancję populacyjną ($\sigma^2$).
+
+```{r}
+set.seed(111)
+# wariancja 
+plot_cis(ci_var_norm,
+         n = n, nsim = N, alpha = a,
+         randgen = function(n) rnorm(n, mean = mi, sd = sigma),
+         true = sigma^2,
+         point_estimator = var,
+         use_log = TRUE)
+```
+
+## 3.4. Korekta Bonferroniego
+Korekta Bonferroniego to metoda minimalizująca ryzyko przy wykonywaniu wielu testów jednocześnie na tych samych danych. Polega na podziale założonego poziomu istotności ($\alpha$) przez liczbę przeprowadzonych porównań ($m$):$$\alpha_{BF} = \frac{\alpha}{m}$$Dzięki zaostrzeniu kryteriów (np. $\frac{0.05}{2} = 0.025$) zapewniamy, że globalne ryzyko błędu dla całego zestawu analiz pozostaje na poziomie $5\%$. Jest to podejście konserwatywne, które chroni przed fałszywymi odkryciami kosztem poszerzenia przedziałów ufności.
+
+```{r}
+set.seed(111)
+mi <- 0
+sigma <- 1
+
+ci_bonferroni <- function(ci_fun, nsim = 20, n = 30, alpha = 0.05, m = 2, true, randgen, point_estimator = NULL, use_log = FALSE, ...) {
+    dolna_std <- numeric(nsim)
+    gorna_std <- numeric(nsim)
+    dolna_bf <- numeric(nsim)
+    gorna_bf <- numeric(nsim)
+    estymatory <- numeric(nsim)
+  
+    alpha_bf <- alpha / m
+  
+    for (i in 1:nsim) {
+        x <- randgen(n)
+        ci_std <- ci_fun(x, alpha = alpha, ...)
+        ci_bf  <- ci_fun(x, alpha = alpha_bf, ...)
+        
+        dolna_std[i] <- ci_std[1]
+        gorna_std[i] <- ci_std[2]
+        dolna_bf[i] <- ci_bf[1]
+        gorna_bf[i] <- ci_bf[2]
+        estymatory[i] <- if (!is.null(point_estimator)) point_estimator(x) else NA
+    }
+    plot(1:nsim, estymatory, 
+         ylim = range(c(dolna_std, gorna_std, dolna_bf, gorna_bf)),
+         log = ifelse(use_log, "y", ""), 
+         pch = 16, xlab = "numer próby", ylab = "wartość", 
+         main = paste("Bonferroni vs zwykłe dla:", deparse(substitute(ci_fun))),
+         las = 1)
+    for (i in 1:nsim) {
+        arrows(i, dolna_std[i], i, gorna_std[i], col = "black", angle = 90, code = 3, length = 0.05)
+        arrows(i + 0.2, dolna_bf[i], i + 0.2, gorna_bf[i], col = "red", angle = 90, code = 3, length = 0.05)
+    }
+    abline(h = true, col = "purple", lwd = 2)
+  
+    pokrycie_std <- mean(true >= dolna_std & true <= gorna_std)
+    pokrycie_bf <- mean(true >= dolna_bf & true <= gorna_bf)
+    cat("pokrycie zwykłe:", pokrycie_std * 100, "%\n")
+    cat("pokrycie Bonferroni:", pokrycie_bf * 100, "%\n")
+}
+```
+
+### 3.4.1. Efekt poprawki Bonferroniego dla średniej
+**- Poszerzenie przedziałów:** Czerwone odcinki są wyraźnie szersze od czarnych, co wynika z zaostrzenia poziomu istotności ($\alpha_{BF} = 0.025$).\
+**- Wzrost wiarygodności:** Większa szerokość skutkuje wyższym pokryciem (wzrost z 95% do 100%), co skuteczniej chroni przed błędem I rodzaju.\
+**- Kompromis statystyczny:** Rezygnujemy z precyzji (węższych przedziałów) na rzecz bezpieczeństwa przy jednoczesnym wnioskowaniu o wielu parametrach.
+
+```{r}
+set.seed(111)
+ci_bonferroni(
+    ci_fun = ci_ex_norm,           
+    true = mi,                   
+    randgen = function(n) rnorm(n, mean = mi, sd = sigma),
+    point_estimator = mean
+)
+```
+
+### 3.4.2. Efekt poprawki Bonferroniego dla wariancji
+**- Asymetryczne poszerzenie:** Podobnie jak przy średniej, poprawka Bonferroniego (czerwone odcinki) skutkuje szerszymi przedziałami. Ze względu na logarytmiczną skalę osi Y i naturę rozkładu $\chi^2$, asymetria tych przedziałów jest wyraźnie widoczna.\
+**- Wzrost wiarygodności:** Wykorzystanie zaostrzonego poziomu istotności pozwoliło uzyskać empiryczne pokrycie na poziomie 100%. Potwierdza to, że metoda skutecznie eliminuje błędy wynikające z wielokrotnego wnioskowania.\
+**- Stabilność estymacji:** Symulacja dowodzi, że korekta Bonferroniego jest uniwersalna – działa poprawnie nie tylko dla parametrów położenia (średnia), ale również dla parametrów rozproszenia (wariancja), zapewniając bezpieczeństwo statystyczne całego badania.
+
+```{r}
+set.seed(111)
+ci_bonferroni(
+    ci_fun = ci_var_norm,          
+    true = sigma^2,                  
+    randgen = function(n) rnorm(n, mean = mi, sd = sigma),
+    point_estimator = var,
+    use_log = TRUE                 
+)
+```
+
+### 3.4.3. Podsumowanie i wnioski końcowe
+**- Skuteczna ochrona:** Korekta Bonferroniego skutecznie zapobiega kumulacji błędów. Wzrost pokrycia do 100% potwierdza, że globalne ryzyko pomyłki przy wielu testach zostało całkowicie opanowane.\
+**- Koszt precyzji:** Wyższa wiarygodność wiąże się z wyraźnym poszerzeniem przedziałów ufności. Tracimy precyzję punktową na rzecz pewności statystycznej.\
+**- Uniwersalność:** Metoda sprawdza się identycznie dla parametrów położenia (średnia) i rozproszenia (wariancja), niezależnie od asymetrii rozkładów.\
+**- Znaczenie badawcze:** Stosowanie poprawki jest niezbędne do zachowania rzetelności naukowej. Chroni przed wyciąganiem fałszywych wniosków wynikających z wielokrotnego przeszukiwania tego samego zbioru danych.
+
+
+# 4. Część III: Testowanie hipotez. Test t-Studenta dla dwóch próbek sparowanych
+## 4.1. Cel badawczy
+Celem analizy jest weryfikacja istotności statystycznej zmian zachodzących w tej samej grupie obiektów pod wpływem określonego czynnika (np. czasu lub interwencji). Badanie ma rozstrzygnąć, czy zaobserwowana różnica między pomiarami jest efektem systematycznym, czy jedynie dziełem przypadku. \
+<br>
+Zastosowanie testu dla prób sparowanych pozwala na wyeliminowanie zmienności międzyosobniczej, co zwiększa precyzję modelu – zamiast porównywać dwie różne grupy, analizujemy dynamikę zmian "każdego obiektu z samym sobą".
+
+## 4.2. Opis procedury testowej 
+### 4.2.1. Hipotezy badawcze
+Zakładamy, że różnice $D$ pochodzą z rozkładu normalnego $N(\mu_D, \sigma_D)$.  \
+**Hipoteza zerowa ($H_0$):** $\mu_D = 0$ (brak istotnej różnicy między pomiarami).  \
+**Hipoteza alternatywna ($H_1$):**\
+- $\mu_D \neq 0$ (test dwustronny).  \
+Zakładamy, że średnia wartość różnic w populacji jest równa zero. Oznacza to brak istotnej różnicy między badanymi pomiarami (np. brak efektu działania leku lub metody szkoleniowej). Wszelkie zaobserwowane odchylenia w próbie przypisywane są wyłącznie błędowi losowemu. \
+- $\mu_D < 0$ lub $\mu_D > 0$ (testy jednostronne). \
+Stosowane, gdy przewidujemy konkretny kierunek efektu. Na przykład $\mu_D > 0$ sugeruje, że pierwszy pomiar ($X$) był średnio wyższy niż drugi ($Y$), co oznacza spadek wartości badanej cechy w czasie. 
+
+### 4.2.2. Statystyka testowa
+W teście wykorzystujemy statystykę $T$, która przy założeniu prawdziwości $H_0$ podlega rozkładowi t-Studenta z $df = n - 1$ stopniami swobody:
+  $$T = \frac{\bar{D}}{S_D / \sqrt{n}}$$
+Gdzie $\bar{D}$ to średnia różnica w próbie, a $S_D$ to odchylenie standardowe różnic.
+
+## 4.3. Testowanie hipotez 
+Do obliczeń w niniejszej analizie przyjęto następujące parametry:\
+**- Poziom istotności ($\alpha$):** 0.05 – oznacza to, że akceptujemy 5% ryzyka popełnienia błędu polegającego na dostrzeżeniu różnicy tam, gdzie jej w rzeczywistości nie ma. \
+**- Liczebność próby ($n$):** 20 par obserwacji. \
+**- Stopnie swobody ($df$):** 19 – parametr ten jest kluczowy dla rozkładu t-Studenta i bezpośrednio wpływa na szerokość wyznaczanych przedziałów.
+
+### 4.3.1. Obszar krytyczny 
+
+```{r}
+ttest_paired_crit_region <- function(alpha, df, alternative) {
+  if (alternative == "two.sided") {
+    dolny <- qt(alpha / 2, df = df)
+    gorny <- qt(1 - alpha / 2, df = df)
+    return(c(-Inf, dolny, gorny, Inf))
+    
+  } else if (alternative == "less") {
+    krytyczny <- qt(alpha, df = df)
+    return(c(-Inf, krytyczny))
+    
+  } else if (alternative == "greater") {
+    krytyczny <- qt(1 - alpha, df = df)
+    return(c(krytyczny, Inf))
+    
+  } else {
+    stop("Niepoprawny argument 'alternative'. Wybierz: 'two.sided', 'less' lub 'greater'.")
+  }
+}
+
+n_par <- 20
+st_swobody <- n_par - 1
+
+#test 1: dwustronny
+ttest_paired_crit_region(0.05, st_swobody, "two.sided")
+
+#test 2: lewostronny
+ttest_paired_crit_region(0.05, st_swobody, "less")
+
+#test 3: prawostronny
+ttest_paired_crit_region(0.05, st_swobody, "greater")
+```
+
+```{r, fig.height=3}
+ttest_plot_region <- function(region, df) {
+    
+  curve(dt(x, df = df), from = -4, to = 4, lwd = 2, 
+        main = paste("Obszar krytyczny (Test t, df =", df, ")"), 
+        ylab = "gęstość", xlab = "t")
+
+  for (i in seq(1, length(region), by = 2)) {
+    dolny <- region[i]
+    gorny <- region[i + 1]
+    
+    plot_dolny <- max(dolny, -4)
+    plot_gorny <- min(gorny, 4)
+
+    x_polygon <- seq(plot_dolny, plot_gorny, length.out = 100)
+    y_polygon <- dt(x_polygon, df = df)
+
+    polygon(c(plot_dolny, x_polygon, plot_gorny), 
+            c(0, y_polygon, 0), 
+            col = "darkred", border = NA)
+  }
+  abline(h = 0)
+}
+
+#zakładamy n = 20 par, czyli df = 19
+df_pary <- 19
+alfa <- 0.05
+
+par(mfrow = c(1,3))
+reg_1 <- ttest_paired_crit_region(alfa, df_pary, "two.sided")
+ttest_plot_region(reg_1, df_pary)
+
+reg_2 <- ttest_paired_crit_region(alfa, df_pary, "greater")
+ttest_plot_region(reg_2, df_pary)
+
+reg_3 <- ttest_paired_crit_region(alfa, df_pary, "less")
+ttest_plot_region(reg_3, df_pary)
+```
+
+**1. Test dwustronny (two.sided)** \
+***- Przedział:*** $(-\infty, -2.093]$ oraz $[2.093, \infty)$. \
+***- Wniosek:*** Jeśli statystyka testowa $t$ jest mniejsza niż -2.093 lub większa niż 2.093, odrzucamy hipotezę zerową ($H_0$) o równości średnich. \
+**2. Test lewostronny (less)** \
+***- Przedział:*** $(-\infty, -1.729]$. \
+***- Wniosek:*** Hipotezę $H_0$ odrzucmy tylko wtedy, gdy statystyka $t$ jest mniejsza lub równa -1.729. \
+**3. Test prawostronny (greater)** \
+***- Przedział:*** $[1.729, \infty)$. \
+***- Wniosek:*** Hipotezę $H_0$ odrzucamy, gdy statystyka $t$ jest większa lub równa 1.729. Jest to lustrzane odbicie testu lewostronnego.
+
+### 4.3.2. Testowanie 
+
+```{r}
+ttest_paired <- function(x, y, alpha, alternative) {
+  d <- x - y
+  n <- length(d)
+  d_srednia <- mean(d)
+  d_sd <- sd(d) #odchylenie standardowe różnic
+  
+  df <- n - 1
+  
+  statystyka <- d_srednia / (d_sd / sqrt(n))
+  
+  region <- ttest_paired_crit_region(alpha, df, alternative)
+  
+  czy_w_krytycznym <- FALSE
+  for (i in seq(1, length(region), by = 2)) {
+    if (statystyka >= region[i] && statystyka <= region[i+1]) {
+      czy_w_krytycznym <- TRUE
+      break
+    }
+  }
+
+  p_value <- switch(alternative,
+    "two.sided" = 2 * (1 - pt(abs(statystyka), df = df)),
+    "less"      = pt(statystyka, df = df),
+    "greater"   = 1 - pt(statystyka, df = df)
+  )
+  
+  return(list(
+    statistic = statystyka,
+    df = df,
+    region = region,
+    result = czy_w_krytycznym,
+    p_value = p_value
+  ))
+}
+
+set.seed(123)
+
+n <- 20
+x <- rnorm(n, mean = 50, sd = 10)
+y <- x + rnorm(n, mean = 2, sd = 5) 
+
+wynik_t <- ttest_paired(x, y, alpha = 0.05, alternative = "two.sided")
+print(wynik_t)
+```
+
+Analiza uzyskanych danych pozwala na wyciągnięcie następujących wniosków: \
+**Brak istotności statystycznej:** Obliczona statystyka $t$ o wartości -1.8792 znajduje się poza obszarem krytycznym, który dla testu dwustronnego zaczyna się od wartości -2.0930. \
+**Wartość p:** Uzyskany wynik $p = 0.0756$ jest większy od założonego poziomu istotności $\alpha = 0.05$ ($p > 0.05$). Oznacza to, że prawdopodobieństwo uzyskania takiej różnicy jedynie na drodze przypadku wynosi ok. 7,6%. \
+**Decyzja:** Nie ma podstaw do odrzucenia hipotezy zerowej ($H_0$). \
+<br>
+Na podstawie przeprowadzonego testu stwierdza się, że zaobserwowana różnica między średnimi w badanych próbach sparowanych nie jest statystycznie istotna. Różnice między wynikami (np. przed i po interwencji) mogą wynikać z naturalnej zmienności losowej, a nie z faktycznego wpływu badanego czynnika.
+
+### 4.3.3. P-value
+
+```{r}
+ttest_pvalue <- function(stat, df, alternative) {
+  p_value <- switch(alternative,
+    "two.sided" = 2 * (1 - pt(abs(stat), df = df)),
+    "less"      = pt(stat, df = df),
+    "greater"   = 1 - pt(stat, df = df)
+  )
+  return(p_value)
+}
+
+set.seed(123)
+n <- 20
+df_pary <- n - 1
+alpha_nom <- 0.05
+
+roznice <- rnorm(n, mean = 1, sd = 2)
+test_stat_t <- mean(roznice) / (sd(roznice) / sqrt(n))
+
+alternatives <- c("less", "two.sided", "greater")
+pvalues_t <- sapply(alternatives, function(alt) ttest_pvalue(test_stat_t, df_pary, alt))
+
+print("Wartości p-value:")
+print(pvalues_t)
+
+mapply(ttest_paired_crit_region,
+       alpha = pvalues_t,
+       df = df_pary,
+       alternative = alternatives,
+       SIMPLIFY = FALSE)
+```
+
+Wyniki wskazują na bardzo silną istotność statystyczną w przypadku testu dwustronnego oraz prawostronnego: \
+**- P-value (two.sided):** Wynosi 0.0082, co jest wartością znacznie niższą od standardowego progu $\alpha = 0.05$. Oznacza to, że różnica między średnimi jest statystycznie istotna. \
+**- P-value (greater):** Wynosi zaledwie 0.0041, co sugeruje, że statystyka testowa znajduje się głęboko w prawostronnym obszarze krytycznym. \
+**- P-value (less):** Wynosi 0.9958, co potwierdza, że statystyka testowa ma wartość dodatnią i nie daje żadnych podstaw do przyjęcia hipotezy lewostronnej.
+
+### 4.3.4. Moc testu 
+
+```{r}
+ttest_power <- function(mu_diff, n, sd_diff, alpha, alternative) {
+  df <- n - 1
+  region <- ttest_paired_crit_region(alpha, df, alternative)
+  
+  #parametr niecentralności 
+  delta <- mu_diff / (sd_diff / sqrt(n))
+  
+  return(sapply(delta, function(d) {
+    p <- 0
+    for (i in seq(1, length(region), by = 2)) {
+        
+      p <- p + (pt(region[i+1], df = df, ncp = d) - pt(region[i], df = df, ncp = d))
+    }
+    return(p)
+  }))
+}
+
+mu_alternatywne <- c(-0.5, 0, 1) 
+n_pary <- 20
+sd_roznicy <- 2
+
+moc_t <- sapply(alternatives,
+                ttest_power,
+                mu_diff = mu_alternatywne, 
+                n = n_pary, 
+                sd_diff = sd_roznicy, 
+                alpha = 0.05)
+
+rownames(moc_t) <- paste("mu1 =", mu_alternatywne)
+
+moc_t_prosta <- round(moc_t, 3)
+
+tabela_koncowa <- as.data.frame(moc_t_prosta)
+colnames(tabela_koncowa) <- c("Lewostronny", "Dwustronny", "Prawostronny")
+
+knitr::kable( tabela_koncowa, caption = "Analiza mocy i rozmiaru testu t-Studenta dla prób sparowanych" )
+```
+
+Analiza mocy potwierdziła poprawność doboru parametrów testu: dla hipotezy zerowej ($\mu_1 = 0$) prawdopodobieństwo odrzucenia wynosi dokładnie $\alpha = 0.05$. \
+**- Wysoka skuteczność:** Test wykazuje największą moc (0.695) przy wykrywaniu silnych różnic dodatnich ($\mu_1 = 1$) za pomocą testu prawostronnego. \
+**- Ograniczenia:** W przypadku niewielkich różnic ujemnych ($\mu_1 = -0.5$), moc spada poniżej 0.3, co wskazuje na wysokie ryzyko błędu II rodzaju (niewykrycia istniejącej zmiany). \
+**- Wniosek:** Przy obecnej wielkości próby ($n = 20$), badanie jest wiarygodne głównie dla wykrywania wyraźnych efektów wzrostowych. Wykrywanie subtelniejszych zmian wymagałoby zwiększenia liczby par w próbie.
+
+## 4.4. Analiza wrażliwości 
+Analiza wrażliwości pozwala ocenić, jak naruszenie założeń testu $t$-Studenta (głównie normalności rozkładu różnic) wpływa na wiarygodność wyników.
+
+### 4.4.1. Wpływ wartości odstających 
+Wartości odstające drastycznie zwiększają wariancję, co "pompuje" mianownik statystyki $t$ i obniża jej wartość. Poniższy kod symuluje sytuację, w której jedna błędna obserwacja (np. błąd wpisywania danych) całkowicie zmienia wynik testu:
+
+```{r}
+set.seed(123)
+x <- rnorm(20, mean = 50, sd = 5)
+y <- x + rnorm(20, mean = 2, sd = 1) 
+
+test <- ttest_paired(x, y, 0.05, "two.sided")
+
+y_outlier <- y
+y_outlier[20] <- y[20] + 100 #wartość odstająca
+t_outlier <- ttest_paired(x, y_outlier, 0.05, "two.sided")
+
+cat("P-value bez outlierów:", test$p_value, "\n")
+cat("P-value z outlierem:", t_outlier$p_value)
+```
+
+**Wniosek:** Nawet przy istnieniu realnego efektu, pojedynczy outlier może sprawić, że $p\text{-value}$ wzrośnie powyżej $0.05$, prowadząc do błędnego przyjęcia $H_0$.
+
+### 4.4.2. Naruszenie założenia o normalności (Błąd I rodzaju)
+Sprawdzamy, czy test $t$ "trzyma" poziom istotności $\alpha = 0.05$, gdy dane pochodzą z rozkładu o silnej asymetrii (np. wykładniczego).
+
+```{r}
+n_sim <- 5000
+
+wyniki_blad <- replicate(n_sim, {
+  d <- rexp(20, rate = 1) - 1 #odejmujemy 1 żeby średnia była 0
+  
+  t_stat <- mean(d) / (sd(d) / sqrt(20))
+  p_val <- 2 * (1 - pt(abs(t_stat), df = 19))
+  p_val < 0.05 # Czy odrzucono H0?
+})
+
+cat("Faktyczny poziom błędu I rodzaju:", mean(wyniki_blad))
+```
+
+**Wniosek:** Dla prób o wielkości $n=20$, test $t$ jest dość odporny na asymetrię, ale przy bardzo "ciężkich ogonach" faktyczny błąd I rodzaju może odbiegać od założonego poziomu $5\%$.
+
+# 5. Część IV: Regresja liniowa. Homogeniczność reszt
+## 5.1. Cel badawczy
+Analiza porównawcza dwóch scenariuszy regresji liniowej: przy spełnionym oraz naruszonym założeniu homoskedastyczności. Celem jest wykazanie, jak rosnący błąd losowy wpływa na błąd standardowy współczynnika nachylenia ($\beta_1$) oraz na stabilność prognoz modelu.
+
+## 5.2. Graficzna ocena reszt
+W celu weryfikacji założenia o stałości wariancji składnika losowego przeprowadzono analizę graficzną reszt. Na wykresach zestawiono wartości dopasowane (prognozy modelu) z residuami (błędami prognozy) dla dwóch scenariuszy symulacyjnych.
+
+```{r}
+set.seed(123)
+n <- 200
+x <- seq(1, 100, length.out = n)
+beta0 <- 5
+beta1 <- 2.5
+
+#homoskedastyczność
+homo <- rnorm(n, mean = 0, sd = 10) #błąd losowy
+y_homo <- beta0 + beta1 * x + homo
+model_homo <- lm(y_homo ~ x)
+
+#heteroskedastyczność 
+#odchylenie rośnie wraz z wartością x
+hetero <- rnorm(n, mean = 0, sd = 0.5 * x)
+y_hetero <- beta0 + beta1 * x + hetero
+model_hetero <- lm(y_hetero ~ x)
+
+par(mfrow = c(1, 2))
+
+plot(fitted(model_homo), resid(model_homo), #redid = y_rzeczywiste - y_przewidziane
+     main = "Homoskedastyczność", 
+     xlab = "Prognozy", ylab = "Reszty",pch = 19)
+abline(h = 0, col = "red", lwd = 2)
+
+plot(fitted(model_hetero), resid(model_hetero), 
+     main = "Heteroskedastyczność", 
+     xlab = "Prognozy", ylab = "Reszty", pch = 19)
+abline(h = 0, col = "red", lwd = 2)
+```
+
+**Wnioski** \
+**1. Homoskedastyczność:** \
+Obserwacja: Losowy i stabilny rozrzut punktów wokół osi $0$. \
+Wniosek: Założenie o stałości wariancji jest spełnione. \
+**2. Heteroskedastyczność:** \
+Obserwacja: Wyraźny kształt "lejka"; wzrost rozrzutu reszt wraz z prognozą. \
+Wniosek: Założenie jest naruszone (występuje heteroskedastyczność).
+
+## 5.3. Analiza stabilności parametrów MNK
+Przeprowadzono symulację Monte Carlo z liczbą powtórzeń $N = 5000$. W każdej iteracji generowano dwa zbiory danych oparte na tym samym trendzie ($y = 10 + 2x$), ale o różnej strukturze błędu losowego. Następnie wyznaczano współczynnik nachylenia $\beta_1$ dla obu modeli, aby porównać rozkład uzyskanych wyników.
+
+```{r}
+beta0 <- 10
+beta1 <- 2
+n_sim <- 5000  
+wyniki_homo <- numeric(n_sim)
+wyniki_hetero <- numeric(n_sim)
+
+for (i in 1:n_sim) {
+  x <- seq(1, 50, length.out = 100)
+  
+  y_homo <- beta0 + beta1 * x + rnorm(100, 0, 15)
+  y_hetero <- beta0 + beta1 * x + rnorm(100, 0, 1.5 * x)
+  
+  wyniki_homo[i] <- coef(lm(y_homo ~ x))[2]
+  wyniki_hetero[i] <- coef(lm(y_hetero ~ x))[2]
+}
+
+wyniki <- data.frame(
+  Statystyka = c("Średnia beta1", "Odchylenie sd estymatora"),
+  Homoskedastyczny = c(mean(wyniki_homo), sd(wyniki_homo)),
+  Heteroskedastyczny = c(mean(wyniki_hetero), sd(wyniki_hetero))
+)
+
+knitr::kable(wyniki, caption = "Porównanie właściwości estymatorów")
+```
+
+**Wnioski z tabeli wyników:** \
+**- Nieobciążoność:** Średnia wartość współczynnika $\beta_1$ w obu scenariuszach oscyluje wokół wartości teoretycznej ($2.0$). Oznacza to, że nawet przy wystąpieniu heteroskedastyczności, model średnio trafia w poprawny wynik. \
+**- Efektywność:** Odchylenie standardowe estymatora w modelu heteroskedastycznym jest wyraźnie wyższe niż w modelu homoskedastycznym. \
+**- Interpretacja:** Naruszenie założenia o stałości wariancji powoduje spadek precyzji oszacowań. Pojedynczy wynik z modelu z heteroskedastycznością jest obarczony większym ryzykiem błędu, co czyni go mniej wiarygodnym (estymator traci cechę największej efektywności).
+
+# 6. Część praktyczna 
+## 6.1. Cel badawczy
+Celem niniejszego opracowania jest statystyczna analiza cech biometrycznych na podstawie zbioru danych Height-Weight. Analiza ma na celu praktyczne zastosowanie metod wnioskowania statystycznego do opisu struktury populacji oraz weryfikacji założeń badawczych. \
+<br>
+**Główne cele badawcze obejmują:** \
+*Opis statystyczny:* Wyznaczenie miar tendencji centralnej, rozproszenia oraz kształtu rozkładu w celu charakterystyki badanej cechy. \
+*Estymację parametrów:* Określenie precyzji obliczeń poprzez wyznaczenie przedziałów ufności dla średniej w populacji, przy nieznanym odchyleniu standardowym. \
+*Weryfikację hipotez:* Statystyczne sprawdzenie istotności różnic między uzyskanymi wynikami a założeniami teoretycznymi przy pomocy testu t-Studenta dla jednej próby. \
+Obliczenia zostały przeprowadzone w środowisku R na losowej próbie $n=100$ obserwacji, przy wykorzystaniu autorskich funkcji zaimplementowanych w modułach estymacji punktowej, przedziałowej oraz testowania hipotez.
+
+```{r}
+set.seed(123)
+mu0 <- 170
+df <- read.csv("data/HeightWeight.csv")
+wzrost <- df$Height.Inches.
+wzrost_cm <- wzrost * 2.54
+probka <- sample(wzrost_cm, 100)
+```
+
+## 6.2. Estymacja punktowa
+
+```{r}
+srednia <- power_mean(probka, p = 1)
+odchylenie_sd <- sd(probka)
+wariancja <- variance(probka)
+skosnosc <- skewness(probka)
+
+wyniki_tabela <- data.frame(
+  Statystyka = c("Średnia", "Odchylenie standardowe", "Wariancja", "Skośność"),
+  Wartość = c(srednia, odchylenie_sd, wariancja, skosnosc),
+  Jednostka = c("cm", "cm", "cm^2", "-")
+)
+
+knitr::kable(wyniki_tabela, 
+      caption = "Parametry statystyczne badanej próby",
+      col.names = c("Parametr", "Wartość", "Jednostka"))
+```
+
+**Podsumowanie statystyczne** \
+**Tendencja centralna:** Średnia wynosząca 173,05 cm przy odchyleniu standardowym 4,75 cm wskazuje na wysoką jednorodność (homogeniczność) grupy. Mały rozrzut wyników potwierdza, że większość obserwacji koncentruje się blisko średniej. \
+**Kształt rozkładu:** Odnotowano słabą asymetrię lewostronną (skośność: -0,058). Oznacza to niewielką przewagę wartości wyższych oraz występowanie nielicznych wyników niższych, które tworzą tzw. lewy ogon rozkładu. \
+**Wnioski:** Ze względu na lekką asymetrię rozkładu (skośność: -0,058) oraz brak znajomości odchylenia standardowego całej populacji, zastosowanie klasycznego rozkładu normalnego byłoby błędem statystycznym. Aby wnioskowanie na naszej próbie ($n=100$) było wiarygodne, w kolejnych etapach analizy wykorzystamy rozkład t-Studenta. Same dane są stabilne i stanowią solidną bazę do testowania hipotez.
+
+## 6.3. Przedziały ufności
+W celu określenia precyzji szacowania parametrów struktury wzrostu w populacji oraz wyznaczenia granic, w których z określonym prawdopodobieństwem znajdują się ich prawdziwe wartości, przeprowadzono estymację przedziałową. 
+
+Na poziomie ufności $1 - \alpha = 0,95$ wyznaczono przedział ufności dla wartości oczekiwanej (średniej) przy założeniu, że odchylenie standardowe populacji jest nieznane. W obliczeniach wykorzystano kwantyl rozkładu $t$-Studenta (`qt`) oraz nieobciążony estymator odchylenia standardowego z próby.
+
+```{r}
+n <- length(probka)
+srednia <- mean(probka)
+odchylenie <- sd(probka)
+alfa <- 0.05
+
+t_krytyczne <- qt(1 - alfa/2, df = n - 1)
+
+se <- odchylenie / sqrt(n)
+margines_bledu <- t_krytyczne * se
+
+dolna <- srednia - margines_bledu
+gorna <- srednia + margines_bledu
+
+przedzial_ufnosci <- c(dolna, gorna)
+cat("95% Przedział ufności dla średniej wzrostu: [", round(dolna, 2), "cm ;", round(gorna, 2), "cm]\n")
+
+hist(probka, breaks = 8, xaxt = "n", main = "Histogram próbki", col = "pink", xlab = "Wzrost [cm]")
+axis(side = 1, at = seq(160, 185, by = 2))
+```
+
+**Wnioski z analizy parametrów wzrostu** \
+Analiza graficzna rozkładu empirycznego ujawnia lokalne wahania liczebności w centrum rozkładu. Jest to naturalny efekt losowości próby o wielkości $n=100$, który nie narusza ogólnej symetrii danych i jest uwzględniany przez procedury estymacyjne. \
+
+Co to oznacza w kontekście badania wzrostu? \
+**Stabilność wyniku:** Wyznaczona wartość oczekiwana cechuje się wysoką precyzją. Wąski przedział ufności gwarantuje, że uzyskana średnia empiryczna stanowi stabilny estymator parametru populacyjnego. \
+**Trafna ocena zróżnicowania:** Zastosowany model przedziałowy właściwie identyfikuje dyspersję danych wokół miary tendencji centralnej. Umożliwia to rzetelne określenie granic, w których z prawdopodobieństwem 0,95 oscyluje przeciętny wzrost osobników w populacji, potwierdzając homogeniczność badanej grupy. \
+**Wiarygodność wnioskowania:** Dzięki wykorzystaniu aparatu teoretycznego rozkładu $t$-Studenta, model uwzględnia ograniczenia wynikające ze skończonej liczebności próby. Wyciągnięte wnioski są odporne na przypadkowe wahania losowe i stanowią rzetelną podstawę do weryfikacji hipotez.
+
+## 6.4. Testowanie hipotez
+W celu formalnej weryfikacji założeń badawczych dotyczących średniego wzrostu w populacji generalnej, przeprowadzono parametryczny test istotności dla wartości oczekiwanej. Procedura ta pozwala rozstrzygnąć, czy zaobserwowana w próbie różnica ma charakter systematyczny, czy jest jedynie wynikiem fluktuacji losowych. Sformułowano hipotezę zerową ($H_0$) oraz dwustronną hipotezę alternatywną ($H_1$):$$H_0: \mu = 170 \text{ cm}$$$$H_1: \mu \neq 170 \text{ cm}$$Weryfikację statystyczną zrealizowano na poziomie istotności $\alpha = 0,05$. Ze względu na brak znajomości odchylenia standardowego w populacji generalnej oraz opieranie wyliczeń na nieobciążonych estymatorach z próby ($n = 100$), jako model teoretyczny statystyki testowej konsekwentnie zastosowano rozkład $t$-Studenta z liczbą stopni swobody $df = n - 1 = 99$.
+
+```{r}
+alpha <- 0.05
+mu0 <- 170
+n_proby <- length(probka)
+df_student <- n_proby - 1
+
+wynik_t_testu <- t.test(probka, mu = mu0, alternative = "two.sided", conf.level = 1 - alpha)
+
+t_empiryczne <- wynik_t_testu$statistic
+p_value_t <- wynik_t_testu$p.value
+czy_odrzucamy_h0 <- p_value_t < alpha
+
+wynik_testu_student <- list(
+  statistic = t_empiryczne,
+  p_value = p_value_t,
+  result = czy_odrzucamy_h0
+)
+print(wynik_testu_student)
+
+t_krytyczne <- qt(1 - alpha/2, df = df_student)
+
+curve(dt(x, df = df_student), from = -7, to = 7, lwd = 2, 
+      main = "Obszar krytyczny testu (Rozkład t-Studenta)", xlab = "t", ylab = "Gęstość")
+
+polygon(c(-7, seq(-7, -t_krytyczne, length.out=100), -t_krytyczne), 
+        c(0, dt(seq(-7, -t_krytyczne, length.out=100), df = df_student), 0), col = "darkred")
+polygon(c(t_krytyczne, seq(t_krytyczne, 7, length.out=100), 7), 
+        c(0, dt(seq(t_krytyczne, 7, length.out=100), df = df_student), 0), col = "darkred")
+
+abline(v = t_empiryczne, col = "blue", lwd = 2, lty = 2)
+text(t_empiryczne, 0.15, labels = paste("t empiryczne =\n", round(t_empiryczne, 2)), pos = 2, col = "blue", cex = 0.8)
+```
+
+**Weryfikacja istotności statystycznej: **
+Zastosowanie procedury testowej opartej na rozkładzie $t$-Studenta pozwoliło na uzyskanie precyzyjnych wyników liczbowych, bezpośrednio powiązanych z aparatem matematycznym teorii estymacji: \
+**- Statystyka testowa i obszar krytyczny:** Wartość statystyki wyniosła 6,41, co plasuje ją głęboko w obszarze krytycznym (zaznaczonym na czerwono na wykresie). Ponieważ wartość ta znacznie wykracza poza granice [−1,96; 1,96], hipoteza zerowa zakładająca średni wzrost na poziomie 170 cm zostaje odrzucona. \
+**- Wiarygodność (p-value):** Ekstremalnie niska wartość p-value oznacza, że prawdopodobieństwo wystąpienia takiego wyniku przez czysty przypadek jest bliskie zeru. \
+<br>
+**Wniosek praktyczny:** Wynik TRUE w polu $result$ ostatecznie potwierdza, że zaobserwowany średni wzrost wynoszący 173,05 cm jest realną i mierzalną cechą badanej populacji, znacząco odbiegającą od teoretycznego założenia 170 cm. Dane wykazują pełną stabilność strukturalną i stanowią w pełni wiarygodną podstawę do dalszych analiz statystycznych.
+**Trafna ocena zróżnicowania:** Wykorzystanie aparatu rozkładu $t$-Studenta pozwoliło poprawnie skorygować niepewność wynikającą ze skończonej liczebności próby ($n=100$) oraz konieczności szacowania odchylenia standardowego na podstawie danych empirycznych.
+
+# Załączniki 
+```{r}
+sessionInfo()
+```
+
